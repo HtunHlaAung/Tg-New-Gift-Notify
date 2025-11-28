@@ -29,10 +29,33 @@ def send_telegram_notification(message):
 
     try:
         response = requests.post(api_url, data=payload)
-        response.raise_for_status()
+        response.raise_for_status() 
         print(f"[{datetime.now().isoformat()}] INFO: Telegram notification sent successfully.")
     except requests.exceptions.RequestException as e:
         print(f"[{datetime.now().isoformat()}] ERROR: Failed to send Telegram notification: {e}")
+
+# --- CORRECTED FUNCTION ---
+def fetch_current_data(url):
+    """Fetches the latest gift data from the API endpoint and handles JSONDecodeError."""
+    try:
+        response = requests.get(url, timeout=10)
+        response.raise_for_status() 
+        
+        try:
+            # Attempt to decode the JSON response
+            data = response.json()
+            print(f"[{datetime.now().isoformat()}] INFO: Successfully fetched and parsed data.")
+            return data
+        except json.JSONDecodeError as e:
+            # If the data is not JSON (e.g., HTML error page), handle the failure gracefully
+            print(f"[{datetime.now().isoformat()}] ERROR: JSON decoding failed. Source returned non-JSON data. Error: {e}")
+            print(f"[{datetime.now().isoformat()}] Raw Response Content (First 200 chars): {response.text[:200]}")
+            return None 
+            
+    except requests.exceptions.RequestException as e:
+        print(f"[{datetime.now().isoformat()}] ERROR: Network or HTTP failure when fetching data: {e}")
+        return None
+# --------------------------
 
 def load_previous_data(file_path):
     """Loads the gift data from the local cache file."""
@@ -46,17 +69,6 @@ def load_previous_data(file_path):
     print(f"[{datetime.now().isoformat()}] INFO: Previous data file not found. Starting with empty data.")
     return {}
 
-def fetch_current_data(url):
-    """Fetches the latest gift data from the API endpoint."""
-    try:
-        response = requests.get(url, timeout=10)
-        response.raise_for_status() 
-        print(f"[{datetime.now().isoformat()}] INFO: Successfully fetched data (Status: {response.status_code}).")
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        print(f"[{datetime.now().isoformat()}] ERROR: Failed to fetch data from API: {e}")
-        return None
-
 def save_current_data(data, file_path):
     """Saves the latest data to the local cache file."""
     with open(file_path, 'w') as f:
@@ -67,15 +79,15 @@ def get_gift_keys(data):
     """Extracts the unique identifiers (keys) from the gift data."""
     return set(data.keys())
 
-# --- Main Logic with Notification ---
 def main():
     print("--- Telegram Gift Tracker Script Start ---")
 
     previous_data = load_previous_data(DATA_FILE)
     current_data = fetch_current_data(GIFT_API_URL)
 
-    if not current_data:
-        print("Script failed due to API fetch error. Exiting.")
+    # If data fetch failed (returned None due to network or JSON error), exit gracefully.
+    if current_data is None: 
+        print("Script cannot proceed because current data fetch failed. Exiting.")
         return
 
     previous_keys = get_gift_keys(previous_data)
