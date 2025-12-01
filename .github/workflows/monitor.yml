@@ -11,13 +11,14 @@ jobs:
   run_bot:
     runs-on: ubuntu-latest
     
-    # Give the workflow read/write access to the repository for managing the state file
+    # --- FIX 1: Grant Write Permissions ---
+    # This is CRITICAL. The GITHUB_TOKEN needs write access to commit files.
     permissions:
       contents: write 
 
     steps:
     - name: Checkout code
-      # This step fetches your code from the repo
+      # This fetches your code, including the existing last_checked_hash.txt
       uses: actions/checkout@v4
 
     - name: Set up Python environment
@@ -31,24 +32,18 @@ jobs:
         pip install -r requirements.txt
 
     - name: Run the main bot script
-      # This step executes main.py, passing your secrets as environment variables
+      # This executes main.py, which creates/updates last_checked_hash.txt
       env:
         BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        TON_API_KEY: ${{ secrets.TON_API_KEY }} # Include if needed by your chosen API
+        TON_API_KEY: ${{ secrets.TON_API_KEY }}
       run: python main.py
       
-    # This crucial step commits the updated state file back to the repository
+    # --- FIX 2: Use dedicated auto-commit action ---
+    # This action handles all the complex Git commands for you.
     - name: Commit state file (last_checked_hash.txt)
-      if: always()
-      run: |
-        git config --global user.name 'github-actions[bot]'
-        git config --global user.email 'github-actions[bot]@users.noreply.github.com'
-        git add last_checked_hash.txt
-        # Check if there are changes to commit (avoids failing on no-change runs)
-        if git diff --staged --quiet; then
-            echo "No changes to commit in state file."
-        else
-            git commit -m "Bot: Update last checked transaction hash"
-            git push
-        fi
+      # Uses the community action to commit changes easily
+      uses: stefanzweifel/git-auto-commit-action@v5
+      with:
+        commit_message: 'Bot: Update NFT last checked hash'
+        files: last_checked_hash.txt # Only commit the state file
