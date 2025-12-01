@@ -1,0 +1,7 @@
+# Python
+__pycache__/
+*.pyc
+venv/
+
+# State file (must be saved but NOT committed)
+last_checked_hash.txt
