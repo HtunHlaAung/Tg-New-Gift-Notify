@@ -7,29 +7,35 @@ import time
 TELEGRAM_TOKEN = os.getenv('BOT_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('CHAT_ID')
 
-# TON API Configuration (Using a public API for demonstration)
-TON_API_URL = "https://tonapi.io/v2/blockchain/accounts/"
+# Use a TON API provider that offers specific NFT endpoints. 
+# tonapi.io is used here for demonstration, but you may need a key for higher limits.
+TON_API_BASE_URL = "https://tonapi.io/v2/" 
 
-# **IMPORTANT**: You must replace this with the actual TON address related to the NFT gifts.
-TARGET_ACCOUNT_ADDRESS = "EQC_f3_s-43y5xW5-K7wQh-Yy9P0I_q-456g-G-H-I-J-K" # <<< REPLACE THIS!
+# **IMPORTANT**: This should be the address of the main NFT Collection or Marketplace Contract.
+# Example placeholder for a collection address:
+TARGET_ACCOUNT_ADDRESS = "EQA-Q1R35bYd1Gz0N-r2r_tq7fI-W8-e_r_e_r_e_r" # <<< REPLACE THIS!
 
-# File to store the last processed transaction hash (for state management)
-STATE_FILE = 'last_checked_hash.txt'
+# File to store the last processed event ID (we now track an item ID or timestamp)
+STATE_FILE = 'last_checked_timestamp.txt'
 
 
 # --- 2. CORE FUNCTIONS ---
 
-def read_last_hash():
-    """Reads the last known transaction hash from the state file."""
+def read_last_timestamp():
+    """Reads the last known processing timestamp from the state file."""
     if os.path.exists(STATE_FILE):
         with open(STATE_FILE, 'r') as f:
-            return f.read().strip()
-    return None
+            try:
+                # Expecting an integer timestamp (seconds)
+                return int(f.read().strip())
+            except ValueError:
+                return 0
+    return 0
 
-def write_last_hash(new_hash):
-    """Writes the new transaction hash to the state file."""
+def write_last_timestamp(new_timestamp):
+    """Writes the new timestamp to the state file."""
     with open(STATE_FILE, 'w') as f:
-        f.write(new_hash)
+        f.write(str(new_timestamp))
 
 def send_alert(message_text):
     """Sends a message to the Telegram chat."""
@@ -38,7 +44,7 @@ def send_alert(message_text):
         print("Error: Missing Telegram Token or Chat ID.")
         return
 
-    # Use 'MarkdownV2' for better formatting, ensuring proper escaping.
+    # Using 'MarkdownV2' for rich formatting
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {
         'chat_id': TELEGRAM_CHAT_ID,
@@ -52,18 +58,19 @@ def send_alert(message_text):
         print("Alert sent successfully!")
     except requests.exceptions.RequestException as e:
         print(f"Failed to send alert: {e}")
-        print(f"Response body: {response.text if response is not None else 'No response'}")
 
 
 def check_for_new_gifts():
-    """The main logic to check for new NFT transfers and send alerts."""
+    """Fetches NFT transfer events and sends detailed alerts."""
     
-    last_hash = read_last_hash()
-    print(f"Last checked transaction hash: {last_hash}")
+    last_timestamp = read_last_timestamp()
+    print(f"Last checked timestamp: {last_timestamp}")
 
     try:
-        # Fetch the latest transactions for the target account
-        api_endpoint = f"{TON_API_URL}{TARGET_ACCOUNT_ADDRESS}/transactions?limit=5"
+        # Fetch recent NFT transfers related to the collection contract.
+        # Filtering by account address requires the specific collection address (e.g., Fragment's).
+        # We limit to 10 events to ensure we catch recent drops.
+        api_endpoint = f"{TON_API_BASE_URL}nft/transfers?account={TARGET_ACCOUNT_ADDRESS}&limit=10"
         
         response = requests.get(api_endpoint)
         response.raise_for_status()
@@ -73,52 +80,58 @@ def check_for_new_gifts():
         print(f"Error fetching TON API data: {e}")
         return
 
-    new_gifts_found = False
-    latest_hash = None
+    new_events_found = False
     
-    transactions = data.get('transactions', [])
-    
-    # If this is the first run, only set the state and don't send massive alerts
-    if last_hash is None and transactions:
-        latest_hash = transactions[0].get('hash')
-        write_last_hash(latest_hash)
-        print(f"First run. State initialized to hash: {latest_hash}")
-        return
+    # Events are usually returned newest first. We process them oldest first to alert in order.
+    transfers = sorted(data.get('nft_transfers', []), key=lambda x: x['block_timestamp'])
 
-    # Iterate through transactions to find new ones
-    for tx in transactions:
-        tx_hash = tx.get('hash')
-        
-        if tx_hash == last_hash:
-            break
-        
-        if latest_hash is None:
-            latest_hash = tx_hash
+    newest_timestamp = last_timestamp
 
-        new_gifts_found = True
+    for transfer in transfers:
+        current_timestamp = transfer.get('block_timestamp', 0)
         
-        # Format the alert message (MarkdownV2 requires escaping special characters)
-        timestamp = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(tx.get('now')))
+        # Skip events that were already processed
+        if current_timestamp <= last_timestamp:
+            continue
+            
+        new_events_found = True
         
-        # Link example:
-        link = f"https://tonscan.org/tx/{tx_hash}" 
+        # Update the newest timestamp found in this run
+        if current_timestamp > newest_timestamp:
+            newest_timestamp = current_timestamp
+
+        # --- 3. EXTRACT RICH DETAILS ---
         
+        # Get NFT Name and Address
+        nft_item = transfer.get('nft_item', {})
+        
+        # The NFT name is usually in the metadata (though the API sometimes includes it directly)
+        item_name = nft_item.get('metadata', {}).get('name', 'Collectible Gift')
+        item_address = transfer.get('nft_item_address', 'N/A')
+        
+        # Format the alert message
+        timestamp_readable = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(current_timestamp))
+        link = f"https://tonscan.org/nft/{item_address}"
+        
+        # MarkdownV2 formatting (special characters like '-' and '.' need to be escaped)
         message = (
             f"🎁 *NEW NFT GIFT ALERT\!* 🎁\n\n"
-            f"**Time:** `{timestamp}`\n"
-            f"**Transaction:** [`{tx_hash}`]({link})\n"
-            f"**Account:** `{TARGET_ACCOUNT_ADDRESS[:8]}...`\n\n"
-            f"_Check the link for details\._"
+            f"**Item:** `{item_name}`\n"
+            f"**Time:** `{timestamp_readable}`\n"
+            f"**Source:** `{transfer.get('sender', {}).get('address', 'N/A')[:8]}...`\n"
+            f"**Destination:** `{transfer.get('recipient', {}).get('address', 'N/A')[:8]}...`\n"
+            f"**Link:** [View Gift]({link})\n"
+            f"_Check the link for full details, price, and marketplace\._"
         )
         
         send_alert(message)
         
-    # --- 3. STATE UPDATE ---
+    # --- 4. STATE UPDATE ---
     
-    if new_gifts_found and latest_hash:
-        write_last_hash(latest_hash)
-        print(f"State updated to new hash: {latest_hash}")
-    elif not new_gifts_found:
+    if new_events_found and newest_timestamp > last_timestamp:
+        write_last_timestamp(newest_timestamp)
+        print(f"State updated to new timestamp: {newest_timestamp}")
+    elif not new_events_found:
         print("No new gifts found since the last check.")
 
 
